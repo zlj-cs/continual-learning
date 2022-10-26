@@ -1,6 +1,4 @@
 
-from xmlrpc.client import Boolean
-from parso import parse
 import torch
 from torch.utils.data import Dataset
 from typing import Callable, List, Tuple
@@ -77,13 +75,14 @@ def acc(pred, true):
     return np.dot(pred.flatten(), true.flatten()) / len(pred)
 
 
-def overwrite_grad(pp, newgrad, grad_dims):
+def overwrite_grad(pp, newgrad, grad_dims, factor):
     """
         This is used to overwrite the gradients with a new gradient
         vector, whenever violations occur.
         pp: parameters
         newgrad: corrected gradient
         grad_dims: list storing number of parameters at each layer
+        facotr: the facotr of gradient correction
     """
     cnt = 0
     for param in pp:
@@ -92,7 +91,7 @@ def overwrite_grad(pp, newgrad, grad_dims):
             en = sum(grad_dims[:cnt + 1])
             this_grad = newgrad[beg: en].contiguous().view(
                 param.grad.data.size())
-            param.grad.data.copy_(this_grad)
+            param.grad.data = param.grad.data - factor * this_grad.data
         cnt += 1
 
 
@@ -142,9 +141,11 @@ def increamental_agem_train(model: nn.Module,
 
                     # correct gradient
                     g = [param.grad.data.view(-1) for param in model.parameters()]
-                    g = torch.cat(g, dim=0)    
-                    if torch.dot(g, g_ref) < 0:               
-                        overwrite_grad(model.parameters(), g_ref, grad_dims)
+                    g = torch.cat(g, dim=0)
+                    condition = torch.dot(g, g_ref)
+                    if condition < 0:               
+                        factor = condition / torch.dot(g_ref, g_ref)
+                        overwrite_grad(model.parameters(), g_ref, grad_dims, factor)
                     # print('g_ref.shape:', g_ref.shape)
 
                     optimizer.step()
@@ -188,13 +189,15 @@ if __name__ == "__main__":
     if args.debug:
         # prepare data
         old_tr = DebugDataset(mode='train')
+        old_te = DebugDataset(mode='test')
         new_d_tr = []
-        new_d_te = []
+        new_d_te = [old_te]
         args.n_tasks = 3
         for _ in range(3):
             new_d_tr.append(DebugDataset(mode='train'))
             new_d_te.append(DebugDataset(mode='test'))
-
+        
+        # prepare buffer
         buffer = Buffer(n_inputs=768, n_outputs=1, n_tasks=args.n_tasks, args=args)
         buffer.update(old_tr, 0)
 
