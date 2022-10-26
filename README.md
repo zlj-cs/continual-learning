@@ -1,5 +1,8 @@
 # continual-learning
-Current supported straties are: A-GEM, vanilla experience replay and LWF.
+Current supported straties:
+- A-GEM
+- vanilla experience replay
+- LWF.
 
 
 for debug mode(demo) use following command : 
