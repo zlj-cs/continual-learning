@@ -1,12 +1,11 @@
-
 import torch
 from torch.utils.data import Dataset
-from typing import Callable, List, Tuple
+from typing import Callable, Dict, List, Tuple
 import numpy as np 
 import random
 import argparse
 import torch.nn as nn
-
+import copy
 class DebugDataset(Dataset):
     def __init__(self, mode: str) -> None:
         super().__init__()
@@ -16,14 +15,13 @@ class DebugDataset(Dataset):
             self.y = torch.randint(0, 2, size=[100, 1], dtype=torch.float32)
         else:
             self.x = torch.randn([10, 768])
-            self.y = torch.randint(0,2, size=[10, 1])
+            self.y = torch.randint(0, 2, size=[10, 1])
 
     def __getitem__(self, index):
         return self.x[index, :], self.y[index, :]
     
     def __len__(self):
         return len(self.x)
-
 
 class Buffer():
     def __init__(self,
@@ -69,7 +67,7 @@ class Buffer():
         # print("sample_y.shape,",sample_y.shape)
 
         return sample_x, sample_y
-        
+       
 
 def acc(pred, true):
     return np.dot(pred.flatten(), true.flatten()) / len(pred)
@@ -102,16 +100,20 @@ def eval_task(model: torch.nn.Module, D_test: List[Tuple[torch.Tensor, torch.Lon
         pred = model(x)
         pred = pred > 0.5
         results.append(metric(pred.cpu().numpy(), y.cpu().numpy()))
-
     return results
 
 
-def increamental_agem_train(model: nn.Module, 
-                       d_tr: Dataset, 
-                       d_test: Dataset, 
-                       buffer: Buffer,
-                       args,
-                       metirc='acc'):
+class IncreamentalStrategyFactory():
+    def __init__(self) -> None:
+        super().__init__()
+
+    @staticmethod
+    def agem(model: nn.Module, 
+             new_d_tr: Dataset, 
+             new_d_test: Dataset, 
+             buffer: Buffer,
+             args,
+             metirc='acc'):
         optimizer = torch.optim.SGD(model.parameters(), lr=args.lr)
         criterion = torch.nn.BCEWithLogitsLoss()
         grad_dims = []
@@ -149,14 +151,84 @@ def increamental_agem_train(model: nn.Module,
                     # print('g_ref.shape:', g_ref.shape)
 
                     optimizer.step()
-                result = eval_task(model, d_test)
+                result = eval_task(model, new_d_test)
                 print(result)
             buffer.update(d_tr, i+1)
-        
+
+    @staticmethod
+    def vanilla_experience_replay(model,
+                                  new_d_tr: Dataset, 
+                                  new_d_test: Dataset, 
+                                  buffer: Buffer,
+                                  args,
+                                  **kwargs):
+        optimizer = torch.optim.SGD(model.parameters(), lr=args.lr)
+        criterion = torch.nn.BCEWithLogitsLoss()
+        # train
+        for i, d_tr in enumerate(new_d_tr):
+            dl = torch.utils.data.DataLoader(d_tr, args.batch_size)           
+            model.train()
+            for _ in range(args.n_epochs):
+                for x, y in dl:
+                    x_ref, y_ref = buffer.sample()
+                    model.zero_grad()
+                    # compute past gradient
+                    y_ref_pred = model(x_ref)
+                    ref_loss = criterion(y_ref, y_ref_pred)
+                    
+                    # compute batch gradient for now
+                    y_pred = model(x)
+                    cur_loss = criterion(y, y_pred)
+
+                    # balance current loss and past loss
+                    loss = cur_loss + args.lamda * ref_loss
+                    loss.backward()
+    
+                    optimizer.step()
+                result = eval_task(model, new_d_test)
+                print(result)
+            buffer.update(d_tr, i+1)
+
+    @staticmethod
+    def lwf(model,
+            new_d_tr: Dataset, 
+            new_d_test: Dataset, 
+            buffer: Buffer,
+            args,
+            **kwargs):
+        optimizer = torch.optim.SGD(model.parameters(), lr=args.lr)
+        criterion = torch.nn.BCEWithLogitsLoss()
+        # train
+        for i, d_tr in enumerate(new_d_tr):
+            dl = torch.utils.data.DataLoader(d_tr, args.batch_size)           
+            old_model = copy.deepcopy(model)
+            model.train()
+            for _ in range(args.n_epochs):
+                for x, y in dl:
+                    # compute old prediction
+                    with torch.no_grad():
+                        y_pred_old = old_model(x)
+                    
+                    # set up new label
+                    y_pred = model(x)
+                    y = (1 - args.lamda) * y  + args.lamda * y_pred_old
+                    loss = criterion(y, y_pred)
+                    loss.backward()
+    
+                    optimizer.step()
+                result = eval_task(model, new_d_test)
+                print(result)
+
+STRATEGY_DICT = {
+    'agem': IncreamentalStrategyFactory.agem,
+    'vanilla': IncreamentalStrategyFactory.vanilla_experience_replay,
+    'lwf': IncreamentalStrategyFactory.lwf
+}
+
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description='Continuum learning')
-    parser.add_argument('--method', type=str, default='A-GEM')
+    parser.add_argument('--strategy', type=str, default='agem', choices=['agem', 'vanilla', 'lwf'])
     parser.add_argument('--n_memories', type=int, default=100,
                         help='number of memories per task')   
     parser.add_argument('--n_epochs', type=int, default=1,
@@ -180,6 +252,8 @@ if __name__ == "__main__":
     parser.add_argument('--device', default=None)
     parser.add_argument('--ref_size', default=32, type=int,
                         help='how many past samples are used to correct gradient')
+    parser.add_argument('--lamda', default=0.1,
+                        help='bigger lamda implies bigger influence the past experience')
     args = parser.parse_args()
 
     torch.backends.cudnn.enabled = False
@@ -206,7 +280,8 @@ if __name__ == "__main__":
 
         # train
         print('model.weight:', model.weight[0][:10])
-        increamental_agem_train(model, new_d_tr, new_d_te, buffer, args)
+        train_strategy = STRATEGY_DICT[args.strategy]
+        train_strategy(model, new_d_tr, new_d_te, buffer, args)
         print('model.weight:', model.weight[0][:10])
 
 
