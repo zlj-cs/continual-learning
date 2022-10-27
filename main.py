@@ -1,3 +1,4 @@
+from turtle import forward
 import torch
 from torch.utils.data import Dataset
 from typing import Callable, Dict, List, Tuple
@@ -6,7 +7,6 @@ import random
 import argparse
 import torch.nn as nn
 import copy
-
 class DebugDataset(Dataset):
     def __init__(self, mode: str) -> None:
         super().__init__()
@@ -43,7 +43,7 @@ class Buffer():
         self.ref_size = args.ref_size
         self.buffer_size = 0
         self.observed_tasks = set()
-         
+        self.sample_beg_idx = 0
     
     def update(self, D_t: Dataset, t: int):
         """
@@ -61,11 +61,14 @@ class Buffer():
     
     def sample(self):
         each_task_sample_size = self.ref_size // len(self.observed_tasks)
-        begin_idx = torch.randint(0, self.n_memories - each_task_sample_size, (1,))
-        sample_x = self.memory_data[: len(self.observed_tasks), begin_idx: begin_idx+each_task_sample_size, :].reshape(-1, self.n_inputs)
-        sample_y = self.memory_labels[: len(self.observed_tasks), begin_idx: begin_idx+each_task_sample_size].reshape(-1, self.n_outputs)
-        # print("sample_x.shape,",sample_x.shape)
-        # print("sample_y.shape,",sample_y.shape)
+        # begin_idx = torch.randint(0, self.n_memories - each_task_sample_size, (1,))
+        if self.sample_beg_idx >= self.n_memories - each_task_sample_size:
+            self.sample_beg_idx = 0
+        beg_idx = self.sample_beg_idx
+        ed_idx = self.sample_beg_idx + each_task_sample_size
+        sample_x = self.memory_data[: len(self.observed_tasks), beg_idx: ed_idx, :].reshape(-1, self.n_inputs)
+        sample_y = self.memory_labels[: len(self.observed_tasks), beg_idx: ed_idx].reshape(-1, self.n_outputs)
+        self.sample_beg_idx += 1        
 
         return sample_x, sample_y
        
@@ -162,6 +165,7 @@ class IncreamentalStrategyFactory():
 
                     condition = torch.dot(g, g_ref)
                     if condition < 0:               
+                        print('correcting!')
                         factor = condition / torch.dot(g_ref, g_ref)
                         overwrite_grad(model.parameters(), g_ref, grad_dims, factor)
                     # print('g_ref.shape:', g_ref.shape)
@@ -247,8 +251,18 @@ class BugPartUsedModel(nn.Module):
         return self.net[1](x)
 
     def show_weight(self):
-        print('model.weight:', list(self.parameters())[0][0][:10])
+        print('model.weight:', list(self.parameters())[0][1][:10])
 
+class NoramlModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.net = nn.Linear(768, 1)
+    
+    def forward(self, x):
+        return self.net(x)
+    
+    def show_weight(self):
+        print('model.weight:', list(self.parameters())[0][0][:10])
 
 if __name__ == "__main__":
     
@@ -301,10 +315,9 @@ if __name__ == "__main__":
         buffer.update(old_tr, 0)
 
         # prepare model
-        model = BugPartUsedModel()
+        # model = BugPartUsedModel()
+        model = NoramlModel()
         
-        
-
         # train
         model.show_weight()
         train_strategy = STRATEGY_DICT[args.strategy]
