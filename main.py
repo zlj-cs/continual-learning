@@ -6,6 +6,7 @@ import random
 import argparse
 import torch.nn as nn
 import copy
+
 class DebugDataset(Dataset):
     def __init__(self, mode: str) -> None:
         super().__init__()
@@ -78,18 +79,20 @@ def overwrite_grad(pp, newgrad, grad_dims, factor):
         This is used to overwrite the gradients with a new gradient
         vector, whenever violations occur.
         pp: parameters
-        newgrad: corrected gradient
+        newgrad: corrected gradient, with gradient
         grad_dims: list storing number of parameters at each layer
         facotr: the facotr of gradient correction
     """
     cnt = 0
+    beg = 0
     for param in pp:
         if param.grad is not None:
-            beg = 0 if cnt == 0 else sum(grad_dims[:cnt])
-            en = sum(grad_dims[:cnt + 1])
+            pp_len = grad_dims[cnt]
+            en = beg + pp_len
             this_grad = newgrad[beg: en].contiguous().view(
                 param.grad.data.size())
             param.grad.data = param.grad.data - factor * this_grad.data
+            beg = en
         cnt += 1
 
 
@@ -102,12 +105,24 @@ def eval_task(model: torch.nn.Module, D_test: List[Tuple[torch.Tensor, torch.Lon
         results.append(metric(pred.cpu().numpy(), y.cpu().numpy()))
     return results
 
+STRATEGY_DICT = {}
+
+def register(target):
+    def f(k, v):
+        STRATEGY_DICT[k] = v
+        return v 
+
+    if callable(target):
+        return f(target.__name__, target)
+    else:
+        return lambda x: f(target, x)
+    
 
 class IncreamentalStrategyFactory():
     def __init__(self) -> None:
         super().__init__()
-
-    @staticmethod
+    
+    @register('agem')
     def agem(model: nn.Module, 
              new_d_tr: Dataset, 
              new_d_test: Dataset, 
@@ -132,7 +147,7 @@ class IncreamentalStrategyFactory():
                     y_ref_pred = model(x_ref)
                     ref_loss = criterion(y_ref, y_ref_pred)
                     ref_loss.backward()
-                    g_ref = [param.grad.data.view(-1) for param in model.parameters()]
+                    g_ref = [param.grad.data.view(-1) for param in model.parameters() if param.grad is not None]
                     g_ref = torch.cat(g_ref, dim=0)
                     
                     # compute batch gradient for now
@@ -142,8 +157,9 @@ class IncreamentalStrategyFactory():
                     loss.backward()
 
                     # correct gradient
-                    g = [param.grad.data.view(-1) for param in model.parameters()]
+                    g = [param.grad.data.view(-1) for param in model.parameters() if param.grad is not None]
                     g = torch.cat(g, dim=0)
+
                     condition = torch.dot(g, g_ref)
                     if condition < 0:               
                         factor = condition / torch.dot(g_ref, g_ref)
@@ -155,7 +171,7 @@ class IncreamentalStrategyFactory():
                 print(result)
             buffer.update(d_tr, i+1)
 
-    @staticmethod
+    @register('vanilla')
     def vanilla_experience_replay(model,
                                   new_d_tr: Dataset, 
                                   new_d_test: Dataset, 
@@ -188,8 +204,8 @@ class IncreamentalStrategyFactory():
                 result = eval_task(model, new_d_test)
                 print(result)
             buffer.update(d_tr, i+1)
-
-    @staticmethod
+    
+    @register('lwf')
     def lwf(model,
             new_d_tr: Dataset, 
             new_d_test: Dataset, 
@@ -219,11 +235,20 @@ class IncreamentalStrategyFactory():
                 result = eval_task(model, new_d_test)
                 print(result)
 
-STRATEGY_DICT = {
-    'agem': IncreamentalStrategyFactory.agem,
-    'vanilla': IncreamentalStrategyFactory.vanilla_experience_replay,
-    'lwf': IncreamentalStrategyFactory.lwf
-}
+class BugPartUsedModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.net = nn.ModuleList(
+            [nn.Linear(256, 10),
+            nn.Linear(768, 1)]
+        )
+
+    def forward(self, x):
+        return self.net[1](x)
+
+    def show_weight(self):
+        print('model.weight:', list(self.parameters())[0][0][:10])
+
 
 if __name__ == "__main__":
     
@@ -276,14 +301,15 @@ if __name__ == "__main__":
         buffer.update(old_tr, 0)
 
         # prepare model
-        model = nn.Linear(768, 1)
+        model = BugPartUsedModel()
+        
+        
 
         # train
-        print('model.weight:', model.weight[0][:10])
+        model.show_weight()
         train_strategy = STRATEGY_DICT[args.strategy]
         train_strategy(model, new_d_tr, new_d_te, buffer, args)
-        print('model.weight:', model.weight[0][:10])
-
+        model.show_weight()
 
     else:
         # TODO:
