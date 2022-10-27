@@ -68,7 +68,7 @@ class Buffer():
         ed_idx = self.sample_beg_idx + each_task_sample_size
         sample_x = self.memory_data[: len(self.observed_tasks), beg_idx: ed_idx, :].reshape(-1, self.n_inputs)
         sample_y = self.memory_labels[: len(self.observed_tasks), beg_idx: ed_idx].reshape(-1, self.n_outputs)
-        self.sample_beg_idx += 1        
+        self.sample_beg_idx += each_task_sample_size       
 
         return sample_x, sample_y
        
