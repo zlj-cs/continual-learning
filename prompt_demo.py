@@ -49,7 +49,7 @@ class PromptModule(nn.Module):
         res = torch.concat((batch_prompt_raw, x_embed))
         
         # Put pull_constraint loss calculation inside
-        loss = torch.mean(prompt_key_norm * prompt_query_norm)
+        loss = torch.sum(prompt_key_norm * prompt_query_norm) / prompt_query_norm.shape[0]
         return res, loss
 
 p = PromptModule()
