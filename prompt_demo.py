@@ -61,8 +61,7 @@ for p in model.parameters():
 def f(x_embed, y, model, use_cls_feature_to_match_prompt=False):
     # x_embed: (bs, seqlen, embed_dim)
     if use_cls_feature_to_match_prompt:
-        with torch.no_grad():   
-            cls_feature = model.get_cls_feature(x_embed)
+        cls_feature = model.get_cls_feature(x_embed)
         x_embed, prompt_loss = p(x_embed, cls_feature)
     else:
         x_embed, prompt_loss = p(x_embed)
