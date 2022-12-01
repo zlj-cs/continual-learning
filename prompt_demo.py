@@ -46,7 +46,7 @@ class PromptModule(nn.Module):
         # select prompt and concat
         (sim_top_k, idx) = torch.topk(sim, self.topk, dim=1) # idx: (#bs, )
         batch_prompt_raw = self.prompt[idx, ...] # (bs, prompt_len, embed_dim)
-        res = torch.concat((batch_prompt_raw, x_embed))
+        res = torch.concat((batch_prompt_raw, x_embed), dim=1)
         
         # Put pull_constraint loss calculation inside
         loss = torch.sum(prompt_key_norm * prompt_query_norm) / prompt_query_norm.shape[0]
