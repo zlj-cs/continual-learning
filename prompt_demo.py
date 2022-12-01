@@ -67,8 +67,8 @@ def f(x_embed, y, model, use_cls_feature_to_match_prompt=False):
         x_embed, prompt_loss = p(x_embed)
     prompt_len, topk = p.prompt_len, p.topk
     x_embed = model.attention_layers(x_embed)
-    x_embed = x_embed[:prompt_len*topk, ...] # (prompt_len*topk, feat_dim)
-    x_embed = torch.mean(x_embed, axis=0)
+    x_embed = x_embed[:, :prompt_len*topk, ...] # (bs, prompt_len*topk, feat_dim)
+    x_embed = torch.mean(x_embed, axis=1)
     y_pred = model.cls_layer(x_embed)
     pred_loss = criterion(y_pred, y)
     loss = pred_loss + lamda * prompt_loss
